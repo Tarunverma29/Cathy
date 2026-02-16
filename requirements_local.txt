@@ -1,0 +1,15 @@
+ollama
+sentence-transformers
+transformers
+torch
+python-telegram-bot==20.7
+psycopg2-binary
+sqlalchemy
+pgvector
+python-dotenv
+streamlit
+pandas
+plotly
+numpy
+scikit-learn
+
