@@ -26,7 +26,7 @@ from mental.logger import log_emotional_state
 
 from core.llm import generate
 
-BOT_TOKEN = "8387791728:AAECyIoxGIGtCRLPH6fuRrx7l8DU3_QriX4"
+BOT_TOKEN = "bot-token"
 
 with open("personas/cathy.txt", "r", encoding="utf-8") as f:
     CHARACTER = f.read()
