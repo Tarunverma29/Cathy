@@ -2,7 +2,7 @@ ollama
 sentence-transformers
 transformers
 torch
-python-telegram-bot==20.7
+python-telegram-bot
 psycopg2-binary
 sqlalchemy
 pgvector
@@ -12,4 +12,10 @@ pandas
 plotly
 numpy
 scikit-learn
-
+fastapi
+uvicorn[standard]
+python-jose[cryptography]
+bcrypt
+passlib
+pydantic[email]
+websockets
