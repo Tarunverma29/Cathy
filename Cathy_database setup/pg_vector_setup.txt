@@ -1,0 +1,15 @@
+One thing to flag — memories.embedding uses vector(1536) which requires the pgvector extension. Make sure whoever is setting this up installs it first:
+
+# Ubuntu/Debian
+sudo apt install postgresql-16-pgvector
+
+# Mac (Homebrew)
+brew install pgvector
+
+# or via psql if already available on the server
+CREATE EXTENSION vector;
+
+
+
+If they don't need the memory/embedding feature they can just change vector(1536) to TEXT temporarily and add it back later.
+

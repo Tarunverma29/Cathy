@@ -1,0 +1,11 @@
+To run it — two options:
+Option A — paste directly into psql:
+
+psql -U postgres
+# then paste the whole thing
+
+
+Option B — save as a file and run:
+
+# save as setup.sql then:
+psql -U postgres -f setup.sql

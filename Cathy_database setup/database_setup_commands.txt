@@ -1,0 +1,125 @@
+-- ─── 1. Create user and database ─────────────────────────────────────────────
+CREATE USER local_user WITH PASSWORD 'your_password_here';
+CREATE DATABASE local_rp OWNER local_user;
+\c local_rp
+
+-- ─── 2. Grant privileges ──────────────────────────────────────────────────────
+GRANT ALL PRIVILEGES ON DATABASE local_rp TO local_user;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO local_user;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO local_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO local_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO local_user;
+
+-- ─── 3. Enable pgvector (needed for memories.embedding) ───────────────────────
+CREATE EXTENSION IF NOT EXISTS vector;
+
+-- ─── 4. users (local/CLI) ────────────────────────────────────────────────────
+CREATE TABLE users (
+    id           BIGINT       PRIMARY KEY,
+    username     TEXT,
+    first_seen   TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+    gender       VARCHAR(10)  DEFAULT NULL,
+    mbti         VARCHAR(4)   DEFAULT NULL,
+    persona_mbti VARCHAR(4)   DEFAULT NULL,
+    persona_mode VARCHAR(10)  DEFAULT NULL
+);
+
+-- ─── 5. chats (local/CLI) ────────────────────────────────────────────────────
+CREATE TABLE chats (
+    id         SERIAL       PRIMARY KEY,
+    title      TEXT         NOT NULL,
+    created_at TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ─── 6. messages (local/CLI) ─────────────────────────────────────────────────
+CREATE TABLE messages (
+    id         SERIAL       PRIMARY KEY,
+    chat_id    INTEGER      REFERENCES chats(id) ON DELETE CASCADE,
+    role       TEXT         NOT NULL,
+    content    TEXT         NOT NULL,
+    created_at TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ─── 7. memories ─────────────────────────────────────────────────────────────
+CREATE TABLE memories (
+    id          SERIAL       PRIMARY KEY,
+    chat_id     INTEGER      REFERENCES chats(id) ON DELETE CASCADE,
+    content     TEXT         NOT NULL,
+    importance  INTEGER      DEFAULT 1,
+    embedding   vector(1536),
+    created_at  TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ─── 8. emotional_logs ───────────────────────────────────────────────────────
+CREATE TABLE emotional_logs (
+    id                  SERIAL            PRIMARY KEY,
+    telegram_user_id    BIGINT            DEFAULT NULL,
+    web_user_id         INTEGER           DEFAULT NULL,
+    chat_id             INTEGER           DEFAULT NULL,
+    sadness             DOUBLE PRECISION  DEFAULT NULL,
+    anger               DOUBLE PRECISION  DEFAULT NULL,
+    fear                DOUBLE PRECISION  DEFAULT NULL,
+    joy                 DOUBLE PRECISION  DEFAULT NULL,
+    risk_score          DOUBLE PRECISION  DEFAULT NULL,
+    llm_risk            INTEGER           DEFAULT NULL,
+    hopelessness        INTEGER           DEFAULT NULL,
+    emotional_intensity INTEGER           DEFAULT NULL,
+    created_at          TIMESTAMP         DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ─── 9. telegram_users ───────────────────────────────────────────────────────
+CREATE TABLE telegram_users (
+    id               SERIAL       PRIMARY KEY,
+    telegram_user_id BIGINT,
+    username         TEXT,
+    first_name       TEXT,
+    active_chat_id   INTEGER      DEFAULT NULL,
+    last_seen        TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+    created_at       TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+    gender           VARCHAR(10)  DEFAULT NULL,
+    mbti             VARCHAR(4)   DEFAULT NULL,
+    persona_mbti     VARCHAR(4)   DEFAULT NULL,
+    persona_mode     VARCHAR(10)  DEFAULT NULL
+);
+
+-- ─── 10. telegram_user_chats ─────────────────────────────────────────────────
+CREATE TABLE telegram_user_chats (
+    id               SERIAL    PRIMARY KEY,
+    telegram_user_id BIGINT,
+    chat_id          INTEGER   REFERENCES chats(id) ON DELETE CASCADE,
+    created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ─── 11. web_users ───────────────────────────────────────────────────────────
+CREATE TABLE web_users (
+    id           SERIAL       PRIMARY KEY,
+    email        TEXT         NOT NULL UNIQUE,
+    username     TEXT         NOT NULL,
+    password     TEXT         NOT NULL,
+    created_at   TIMESTAMP    DEFAULT now(),
+    gender       VARCHAR(10)  DEFAULT NULL,
+    mbti         VARCHAR(4)   DEFAULT NULL,
+    persona_mbti VARCHAR(4)   DEFAULT NULL,
+    persona_mode VARCHAR(10)  DEFAULT NULL
+);
+
+-- ─── 12. web_chats ───────────────────────────────────────────────────────────
+CREATE TABLE web_chats (
+    id         SERIAL    PRIMARY KEY,
+    user_id    INTEGER   REFERENCES web_users(id) ON DELETE CASCADE,
+    title      TEXT      DEFAULT 'New Chat',
+    created_at TIMESTAMP DEFAULT now()
+);
+
+-- ─── 13. web_messages ────────────────────────────────────────────────────────
+CREATE TABLE web_messages (
+    id         SERIAL    PRIMARY KEY,
+    chat_id    INTEGER   REFERENCES web_chats(id) ON DELETE CASCADE,
+    role       TEXT      NOT NULL,
+    content    TEXT      NOT NULL,
+    created_at TIMESTAMP DEFAULT now()
+);
+
+-- ─── 14. Final grants (catch any sequences created above) ────────────────────
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO local_user;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO local_user;

@@ -1,10 +1,8 @@
 """
 web/backend/routers/chat.py
-
-REST endpoints for chat management + WebSocket for real-time streaming replies.
 """
 
-import sys, os, json
+import sys, os, json, traceback
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, HTTPException
@@ -24,7 +22,6 @@ from mental.classifier import classify_emotions
 from mental.reasoning import analyze_psychology
 from mental.risk_engine import compute_risk
 from mental.responder import build_crisis_response
-from core.llm import generate
 
 import ollama
 from config.settings import MODEL_NAME
@@ -60,12 +57,9 @@ def list_chats(user=Depends(get_current_user)):
 
 @router.get("/chats/{chat_id}/messages")
 def get_messages(chat_id: int, user=Depends(get_current_user)):
-    # Verify chat belongs to user
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute(
-        "SELECT user_id FROM web_chats WHERE id = %s;", (chat_id,)
-    )
+    cur.execute("SELECT user_id FROM web_chats WHERE id = %s;", (chat_id,))
     row = cur.fetchone()
     cur.close()
     conn.close()
@@ -108,19 +102,20 @@ def _build_messages(character: str, conversation: list, user_input: str):
 async def chat_ws(websocket: WebSocket, chat_id: int):
     await websocket.accept()
 
-    # Authenticate via token sent in first message
+    # ── Authenticate ────────────────────────────────────────────────────────
     try:
         auth_msg = await websocket.receive_text()
         data = json.loads(auth_msg)
         token = data.get("token", "")
         user = decode_token(token)
         user_id = int(user["sub"])
-    except Exception:
+    except Exception as e:
+        print(f"WS auth failed: {e}")
         await websocket.send_json({"type": "error", "content": "Unauthorized"})
         await websocket.close()
         return
 
-    # Verify chat ownership
+    # ── Verify chat ownership ────────────────────────────────────────────────
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("SELECT user_id FROM web_chats WHERE id = %s;", (chat_id,))
@@ -134,6 +129,7 @@ async def chat_ws(websocket: WebSocket, chat_id: int):
         return
 
     await websocket.send_json({"type": "ready"})
+    print(f"WS ready: user={user_id} chat={chat_id}")
 
     try:
         while True:
@@ -144,60 +140,76 @@ async def chat_ws(websocket: WebSocket, chat_id: int):
             if not user_input:
                 continue
 
-            # Save user message
-            save_web_message(chat_id, "user", user_input)
+            print(f"WS message: user={user_id} input={user_input[:50]!r}")
 
-            # ── Mental Health Pipeline ──────────────────────────────
-            emotions = classify_emotions(user_input)
-            llm_data = analyze_psychology(user_input)
-            risk_score = compute_risk(emotions, llm_data, 1.0)
+            try:
+                # Save user message
+                save_web_message(chat_id, "user", user_input)
 
-            log_web_emotional_state(user_id, chat_id, emotions, llm_data, risk_score)
+                # ── Mental Health Pipeline ──────────────────────────────────
+                emotions   = classify_emotions(user_input)
+                llm_data   = analyze_psychology(user_input)
+                risk_score = compute_risk(emotions, llm_data, 1.0)
 
-            # ── Critical Risk — no streaming, send crisis response ──
-            if risk_score >= 15:
-                reply = build_crisis_response(
-                    user_input, emotions, llm_data, risk_score, use_llm=True
-                )
-                save_web_message(chat_id, "assistant", reply)
-                await websocket.send_json({"type": "message", "content": reply, "risk": risk_score})
-                continue
+                print(f"WS pipeline: risk={risk_score} emotions={emotions}")
 
-            # ── Stream Ollama reply ─────────────────────────────────
-            conversation = get_recent_web_messages(chat_id, limit=10)
-            messages = _build_messages(CHARACTER, conversation, user_input)
+                log_web_emotional_state(user_id, chat_id, emotions, llm_data, risk_score)
 
-            # Prepend check-in for high risk
-            if risk_score >= 10:
-                check_in = build_crisis_response(
-                    user_input, emotions, llm_data, risk_score, use_llm=False
-                )
-                await websocket.send_json({"type": "checkin", "content": check_in})
+                # ── Critical Risk ───────────────────────────────────────────
+                if risk_score >= 15:
+                    reply = build_crisis_response(
+                        user_input, emotions, llm_data, risk_score, use_llm=True
+                    )
+                    save_web_message(chat_id, "assistant", reply)
+                    await websocket.send_json({"type": "message", "content": reply})
+                    continue
 
-            full_reply = ""
-            await websocket.send_json({"type": "stream_start"})
+                # ── High risk check-in before streaming ─────────────────────
+                if risk_score >= 10:
+                    check_in = build_crisis_response(
+                        user_input, emotions, llm_data, risk_score, use_llm=False
+                    )
+                    await websocket.send_json({"type": "checkin", "content": check_in})
 
-            for chunk in ollama.chat(
-                model=MODEL_NAME,
-                messages=messages,
-                stream=True,
-                options={"temperature": 0.7, "top_p": 0.9, "repeat_penalty": 1.2},
-            ):
-                token = chunk["message"]["content"]
-                full_reply += token
-                await websocket.send_json({"type": "stream", "content": token})
+                # ── Stream Ollama reply ─────────────────────────────────────
+                conversation = get_recent_web_messages(chat_id, limit=10)
+                messages_list = _build_messages(CHARACTER, conversation, user_input)
 
-            await websocket.send_json({"type": "stream_end"})
+                full_reply = ""
+                await websocket.send_json({"type": "stream_start"})
 
-            # Append soft check-in for moderate risk
-            if 6 <= risk_score < 10:
-                check_in = build_crisis_response(
-                    user_input, emotions, llm_data, risk_score, use_llm=False
-                )
-                full_reply += f"\n\n…{check_in}"
-                await websocket.send_json({"type": "checkin", "content": f"…{check_in}"})
+                for chunk in ollama.chat(
+                    model=MODEL_NAME,
+                    messages=messages_list,
+                    stream=True,
+                    options={"temperature": 0.7, "top_p": 0.9, "repeat_penalty": 1.2},
+                ):
+                    token = chunk["message"]["content"]
+                    if token:
+                        full_reply += token
+                        await websocket.send_json({"type": "stream", "content": token})
 
-            save_web_message(chat_id, "assistant", full_reply)
+                await websocket.send_json({"type": "stream_end"})
+                print(f"WS stream done: {len(full_reply)} chars")
+
+                # ── Moderate risk check-in after reply ──────────────────────
+                if 6 <= risk_score < 10:
+                    check_in = build_crisis_response(
+                        user_input, emotions, llm_data, risk_score, use_llm=False
+                    )
+                    full_reply += f"\n\n…{check_in}"
+                    await websocket.send_json({"type": "checkin", "content": f"…{check_in}"})
+
+                save_web_message(chat_id, "assistant", full_reply)
+
+            except Exception as e:
+                print(f"WS pipeline error: {traceback.format_exc()}")
+                await websocket.send_json({
+                    "type": "error",
+                    "content": f"Something went wrong: {str(e)}"
+                })
+                # Don't close — let user try again
+                await websocket.send_json({"type": "stream_end"})
 
     except WebSocketDisconnect:
-        pass
+        print(f"WS disconnected: user={user_id} chat={chat_id}")

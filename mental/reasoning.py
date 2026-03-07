@@ -1,3 +1,4 @@
+import re
 import json
 import ollama
 from config.settings import MODEL_NAME
@@ -14,6 +15,8 @@ Analyze the user's message and return ONLY valid JSON in this format:
   "emotional_intensity": 0-10,
   "requires_attention": true/false
 }
+
+Return ONLY the JSON object. No explanation, no markdown, no other text.
 """
 
 def analyze_psychology(message: str):
@@ -30,9 +33,17 @@ def analyze_psychology(message: str):
 
     content = response["message"]["content"]
 
+    # Strip <think>...</think> blocks that qwen3 and similar models emit
+    content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+
+    # Extract JSON object if wrapped in markdown code fences
+    match = re.search(r'\{.*\}', content, re.DOTALL)
+    if match:
+        content = match.group(0)
+
     try:
         return json.loads(content)
-    except:
+    except Exception:
         return {
             "mood_state": "unknown",
             "risk_level": 0,
@@ -40,4 +51,3 @@ def analyze_psychology(message: str):
             "emotional_intensity": 0,
             "requires_attention": False
         }
-
