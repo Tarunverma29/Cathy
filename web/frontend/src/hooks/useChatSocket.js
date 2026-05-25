@@ -1,6 +1,5 @@
 import { useRef, useCallback, useEffect } from 'react'
 
-// Use wss:// on https pages, ws:// on http
 const WS_PROTOCOL = window.location.protocol === 'https:' ? 'wss' : 'ws'
 const WS_BASE = `${WS_PROTOCOL}://${window.location.host}`
 
@@ -24,7 +23,7 @@ export function useChatSocket({ chatId, token, onToken, onCheckIn, onDone, onErr
 
     // Close existing connection cleanly
     if (wsRef.current && wsRef.current.readyState < 2) {
-      wsRef.current.onclose = null  // prevent old onclose from firing
+      wsRef.current.onclose = null
       wsRef.current.close()
     }
 
@@ -33,7 +32,6 @@ export function useChatSocket({ chatId, token, onToken, onCheckIn, onDone, onErr
     wsRef.current = ws
 
     ws.onopen = () => {
-      // First message must be auth token
       ws.send(JSON.stringify({ token }))
     }
 
@@ -51,11 +49,11 @@ export function useChatSocket({ chatId, token, onToken, onCheckIn, onDone, onErr
           break
 
         case 'stream_start':
-          // Just signals streaming is beginning — no content yet, do nothing
+          // Streaming is beginning
           break
 
         case 'stream':
-          // Individual token chunk from Ollama
+          // Individual token chunk
           if (msg.content) onToken?.(msg.content)
           break
 
@@ -65,8 +63,12 @@ export function useChatSocket({ chatId, token, onToken, onCheckIn, onDone, onErr
           break
 
         case 'message':
-          // Full message (used for crisis responses — not streamed)
-          onToken?.(msg.content)
+          // FIX: Full non-streamed message (crisis responses).
+          // Feed it as a single token, then signal done so onDone
+          // can flush the buffer and create the message bubble.
+          if (msg.content) {
+            onToken?.(msg.content)
+          }
           onDone?.()
           break
 
@@ -77,17 +79,22 @@ export function useChatSocket({ chatId, token, onToken, onCheckIn, onDone, onErr
         case 'error':
           onError?.(msg.content)
           break
+
+        default:
+          console.warn('Unknown WS message type:', msg.type)
       }
     }
 
-    ws.onerror = () => {
+    ws.onerror = (err) => {
+      console.error('WebSocket error:', err)
       cbRef.current.onError?.('Connection error — retrying…')
     }
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       readyRef.current = false
+      console.log('WS closed:', event.code, event.reason)
     }
-  }, [chatId, token, flush])  // only reconnects when chatId or token changes
+  }, [chatId, token, flush])
 
   const send = useCallback((message) => {
     const payload = JSON.stringify({ message })
@@ -95,7 +102,6 @@ export function useChatSocket({ chatId, token, onToken, onCheckIn, onDone, onErr
     if (readyRef.current && wsRef.current?.readyState === 1) {
       wsRef.current.send(payload)
     } else {
-      // Queue the message and reconnect if needed
       queueRef.current.push(payload)
       if (!wsRef.current || wsRef.current.readyState > 1) {
         connect()

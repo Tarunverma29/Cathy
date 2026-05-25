@@ -7,7 +7,16 @@ function parseToken(t) {
     const payload = JSON.parse(atob(t.split('.')[1]))
     // Check expiry
     if (payload.exp && payload.exp * 1000 < Date.now()) return null
-    return { id: payload.sub, email: payload.email, username: payload.username }
+    return {
+      id:           payload.sub,
+      email:        payload.email,
+      username:     payload.username,
+      // Optional MBTI/persona fields (may not exist in older tokens)
+      gender:       payload.gender       || null,
+      mbti:         payload.mbti         || null,
+      persona_mbti: payload.persona_mbti || null,
+      persona_mode: payload.persona_mode || null,
+    }
   } catch {
     return null
   }
@@ -16,7 +25,7 @@ function parseToken(t) {
 export function AuthProvider({ children }) {
   const [token,   setToken]   = useState(null)
   const [user,    setUser]    = useState(null)
-  const [loading, setLoading] = useState(true)  // true until we've checked localStorage
+  const [loading, setLoading] = useState(true)
 
   // On mount — restore session from localStorage
   useEffect(() => {
@@ -42,6 +51,16 @@ export function AuthProvider({ children }) {
     setUser(parsed)
   }, [])
 
+  // Called after profile update — receives a new JWT from the backend
+  const updateUser = useCallback((newAccessToken) => {
+    if (!newAccessToken) return
+    const parsed = parseToken(newAccessToken)
+    if (!parsed) return
+    localStorage.setItem('cathy_token', newAccessToken)
+    setToken(newAccessToken)
+    setUser(parsed)
+  }, [])
+
   const logout = useCallback(() => {
     localStorage.removeItem('cathy_token')
     setToken(null)
@@ -54,6 +73,7 @@ export function AuthProvider({ children }) {
       user,
       login,
       logout,
+      updateUser,
       loading,
       isAuthed: !!token && !!user,
     }}>

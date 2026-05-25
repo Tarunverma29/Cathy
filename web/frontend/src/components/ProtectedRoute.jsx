@@ -4,18 +4,12 @@ import { useAuth } from '../context/AuthContext'
 export default function ProtectedRoute({ children }) {
   const { isAuthed, loading } = useAuth()
 
-  // Don't redirect while we're still reading localStorage
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-ink-950">
-        <div className="flex gap-2">
-          {[0,1,2].map(i => (
-            <span
-              key={i}
-              className="w-2 h-2 rounded-full bg-blush-400 animate-blink"
-              style={{ animationDelay: `${i * 0.15}s` }}
-            />
-          ))}
+      <div className="min-h-screen flex items-center justify-center bg-gray-950">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-8 h-8 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
+          <span className="text-slate-600 text-xs font-mono">Loading…</span>
         </div>
       </div>
     )

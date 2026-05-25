@@ -1,5 +1,10 @@
 """
 web/backend/routers/chat.py
+
+Fixes:
+- Loads persona file dynamically based on user's persona_mbti + persona_mode + gender
+- Falls back to personas/cathy.txt if no persona configured or file not found
+- WebSocket now reads persona_mbti/persona_mode from JWT on each connection
 """
 
 import sys, os, json, traceback
@@ -28,8 +33,79 @@ from config.settings import MODEL_NAME
 
 router = APIRouter()
 
-with open("personas/cathy.txt", "r", encoding="utf-8") as f:
-    CHARACTER = f.read()
+# ── Persona name map ─────────────────────────────────────────────────────────
+# Maps MBTI type → (female_name, male_name)
+PERSONA_NAMES = {
+    'INFP': ('lily',   'eli'),
+    'ENFP': ('nova',   'finn'),
+    'INFJ': ('sera',   'aaron'),
+    'ENFJ': ('maya',   'theo'),
+    'ISFP': ('zoe',    'kai'),
+    'ESFP': ('mia',    'rex'),
+    'ISFJ': ('rose',   'sam'),
+    'ESFJ': ('cathy',  'marcus'),
+    'INTP': ('nora',   'leo'),
+    'ENTP': ('quinn',  'jace'),
+    'INTJ': ('vera',   'cole'),
+    'ENTJ': ('ava',    'zane'),
+    'ISTP': ('rena',   'rhys'),
+    'ESTP': ('skye',   'dex'),
+    'ISTJ': ('claire', 'grant'),
+    'ESTJ': ('dana',   'brett'),
+}
+
+# Default fallback character
+_DEFAULT_CHARACTER = None
+
+def _load_default():
+    global _DEFAULT_CHARACTER
+    if _DEFAULT_CHARACTER is None:
+        with open("personas/cathy.txt", "r", encoding="utf-8") as f:
+            _DEFAULT_CHARACTER = f.read()
+    return _DEFAULT_CHARACTER
+
+
+def load_character(persona_mbti: str | None, persona_mode: str | None, gender: str | None) -> str:
+    """
+    Load the correct persona .txt file.
+    persona_mode: 'romantic' | 'neutral'
+    gender: user's gender → determines which persona gender to use
+    """
+    if not persona_mbti:
+        return _load_default()
+
+    mbti = persona_mbti.upper()
+    if mbti not in PERSONA_NAMES:
+        return _load_default()
+
+    female_name, male_name = PERSONA_NAMES[mbti]
+
+    # Persona gender is opposite of user's gender
+    # (male user → female persona, female user → male persona)
+    if gender and gender.lower() == 'female':
+        persona_gender = 'male'
+        name = male_name
+    else:
+        persona_gender = 'female'
+        name = female_name
+
+    # Try to find the file: personas/{gender}/{mode}/{name}.txt
+    mode_folder = 'girlfriend' if (persona_mode or '').lower() == 'romantic' else 'neutral'
+
+    candidate_paths = [
+        f"personas/{persona_gender}/{mode_folder}/{name}.txt",
+        f"personas/{persona_gender}/{mode_folder}/{mbti.lower()}.txt",
+        f"personas/{name}.txt",
+        f"personas/{mbti.lower()}.txt",
+        "personas/cathy.txt",
+    ]
+
+    for path in candidate_paths:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read()
+
+    return _load_default()
 
 
 # ── REST: Chat Management ────────────────────────────────────────────────────
@@ -58,7 +134,7 @@ def list_chats(user=Depends(get_current_user)):
 @router.get("/chats/{chat_id}/messages")
 def get_messages(chat_id: int, user=Depends(get_current_user)):
     conn = get_conn()
-    cur = conn.cursor()
+    cur  = conn.cursor()
     cur.execute("SELECT user_id FROM web_chats WHERE id = %s;", (chat_id,))
     row = cur.fetchone()
     cur.close()
@@ -74,7 +150,7 @@ def get_messages(chat_id: int, user=Depends(get_current_user)):
 @router.delete("/chats/{chat_id}")
 def delete_chat(chat_id: int, user=Depends(get_current_user)):
     conn = get_conn()
-    cur = conn.cursor()
+    cur  = conn.cursor()
     cur.execute(
         "DELETE FROM web_chats WHERE id = %s AND user_id = %s;",
         (chat_id, int(user["sub"]))
@@ -105,10 +181,10 @@ async def chat_ws(websocket: WebSocket, chat_id: int):
     # ── Authenticate ────────────────────────────────────────────────────────
     try:
         auth_msg = await websocket.receive_text()
-        data = json.loads(auth_msg)
-        token = data.get("token", "")
-        user = decode_token(token)
-        user_id = int(user["sub"])
+        data     = json.loads(auth_msg)
+        token    = data.get("token", "")
+        user     = decode_token(token)
+        user_id  = int(user["sub"])
     except Exception as e:
         print(f"WS auth failed: {e}")
         await websocket.send_json({"type": "error", "content": "Unauthorized"})
@@ -117,7 +193,7 @@ async def chat_ws(websocket: WebSocket, chat_id: int):
 
     # ── Verify chat ownership ────────────────────────────────────────────────
     conn = get_conn()
-    cur = conn.cursor()
+    cur  = conn.cursor()
     cur.execute("SELECT user_id FROM web_chats WHERE id = %s;", (chat_id,))
     row = cur.fetchone()
     cur.close()
@@ -128,19 +204,26 @@ async def chat_ws(websocket: WebSocket, chat_id: int):
         await websocket.close()
         return
 
+    # ── Load persona from user's JWT ─────────────────────────────────────────
+    CHARACTER = load_character(
+        persona_mbti=user.get("persona_mbti"),
+        persona_mode=user.get("persona_mode"),
+        gender=user.get("gender"),
+    )
+
     await websocket.send_json({"type": "ready"})
-    print(f"WS ready: user={user_id} chat={chat_id}")
+    print(f"WS ready: user={user_id} chat={chat_id} persona={user.get('persona_mbti','default')}")
 
     try:
         while True:
-            raw = await websocket.receive_text()
-            data = json.loads(raw)
+            raw        = await websocket.receive_text()
+            data       = json.loads(raw)
             user_input = data.get("message", "").strip()
 
             if not user_input:
                 continue
 
-            print(f"WS message: user={user_id} input={user_input[:50]!r}")
+            print(f"WS message: user={user_id} input={user_input[:60]!r}")
 
             try:
                 # Save user message
@@ -150,8 +233,6 @@ async def chat_ws(websocket: WebSocket, chat_id: int):
                 emotions   = classify_emotions(user_input)
                 llm_data   = analyze_psychology(user_input)
                 risk_score = compute_risk(emotions, llm_data, 1.0)
-
-                print(f"WS pipeline: risk={risk_score} emotions={emotions}")
 
                 log_web_emotional_state(user_id, chat_id, emotions, llm_data, risk_score)
 
@@ -172,7 +253,7 @@ async def chat_ws(websocket: WebSocket, chat_id: int):
                     await websocket.send_json({"type": "checkin", "content": check_in})
 
                 # ── Stream Ollama reply ─────────────────────────────────────
-                conversation = get_recent_web_messages(chat_id, limit=10)
+                conversation  = get_recent_web_messages(chat_id, limit=10)
                 messages_list = _build_messages(CHARACTER, conversation, user_input)
 
                 full_reply = ""
@@ -184,10 +265,10 @@ async def chat_ws(websocket: WebSocket, chat_id: int):
                     stream=True,
                     options={"temperature": 0.7, "top_p": 0.9, "repeat_penalty": 1.2},
                 ):
-                    token = chunk["message"]["content"]
-                    if token:
-                        full_reply += token
-                        await websocket.send_json({"type": "stream", "content": token})
+                    token_text = chunk["message"]["content"]
+                    if token_text:
+                        full_reply += token_text
+                        await websocket.send_json({"type": "stream", "content": token_text})
 
                 await websocket.send_json({"type": "stream_end"})
                 print(f"WS stream done: {len(full_reply)} chars")
@@ -203,12 +284,11 @@ async def chat_ws(websocket: WebSocket, chat_id: int):
                 save_web_message(chat_id, "assistant", full_reply)
 
             except Exception as e:
-                print(f"WS pipeline error: {traceback.format_exc()}")
+                print(f"WS pipeline error:\n{traceback.format_exc()}")
                 await websocket.send_json({
                     "type": "error",
                     "content": f"Something went wrong: {str(e)}"
                 })
-                # Don't close — let user try again
                 await websocket.send_json({"type": "stream_end"})
 
     except WebSocketDisconnect:
